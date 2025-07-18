@@ -3,5 +3,6 @@ export type Lifeguard = {
   name: string;
   group: "G1" | "G2";
   rank: number;
-  postPreferences?: string[];
+  preferenceA_id?: string;
+  preferenceB_id?: string;
 };
