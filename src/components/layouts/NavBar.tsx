@@ -14,6 +14,9 @@ export default function Navbar() {
           <Link to="/posts" className="hover:text-gray-300">
             Postos
           </Link>
+          <Link to="/history" className="hover:text-gray-300">
+            Histórico
+          </Link>
         </div>
       </nav>
     </header>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { type Lifeguard } from "../types/Lifeguard";
 import { type BeachPost } from "../types/BeachPost";
@@ -6,8 +6,11 @@ import {
   generateSchedule,
   type FinalSchedule,
   type AssignedCompulsoryDaysOff,
+  type ReasoningLog
 } from "../utils/scheduleAlgorithm";
 import Stepper from "../components/ui/Stepper";
+import React from "react";
+import type { SavedSchedule } from "../types/SavedSchedule";
 
 type CapacityMatrix = { [postId: string]: { [date: string]: number } };
 type RequestedDaysOff = { [lifeguardId: string]: { [date: string]: boolean } };
@@ -15,6 +18,7 @@ type RequestedDaysOff = { [lifeguardId: string]: { [date: string]: boolean } };
 export default function ScheduleGeneratorPage() {
   const [lifeguards] = useLocalStorage<Lifeguard[]>("bac-roster", []);
   const [posts] = useLocalStorage<BeachPost[]>("bac-posts", []);
+  const [scheduleHistory, setScheduleHistory] = useLocalStorage<SavedSchedule[]>("bac-schedule-history", []);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [g1Shifts, setG1Shifts] = useState(11);
@@ -29,6 +33,8 @@ export default function ScheduleGeneratorPage() {
   );
   const [assignedFCs, setAssignedFCs] =
     useState<AssignedCompulsoryDaysOff | null>(null);
+
+   const [reasoningLog, setReasoningLog] = useState<ReasoningLog | null>(null);  
 
   const [currentStep, setCurrentStep] = useState(1);
   const steps = ["Configuração", "Vagas", "Folgas", "Gerar"];
@@ -92,9 +98,46 @@ export default function ScheduleGeneratorPage() {
       lifeguards,
       posts,
     };
-    const { schedule, compulsoryDaysOff } = generateSchedule(config);
+    const { schedule, compulsoryDaysOff, reasoningLog } = generateSchedule(config);
     setFinalSchedule(schedule);
+    setReasoningLog(reasoningLog);
     setAssignedFCs(compulsoryDaysOff);
+  };
+
+   const handleSaveToHistory = () => {
+    if (!finalSchedule || !assignedFCs || !reasoningLog ) {
+      alert("Nenhuma escala foi gerada para salvar.");
+      return;
+    }
+
+    const defaultName = `Escala de ${startDate} a ${endDate}`;
+    const scheduleName = prompt("Digite um nome para esta escala:", defaultName);
+
+    if (!scheduleName) {
+      return;
+    }
+
+    const newSavedSchedule: SavedSchedule = {
+      id: crypto.randomUUID(),
+      name: scheduleName,
+      savedAt: new Date().toISOString(),
+      inputs: {
+        startDate,
+        endDate,
+        g1Shifts,
+        g2Shifts,
+        capacityMatrix,
+        requestedDaysOff,
+      },
+      outputs: {
+        schedule: finalSchedule,
+        compulsoryDaysOff: assignedFCs,
+        reasoningLog: reasoningLog,
+      },
+    };
+
+    setScheduleHistory([...scheduleHistory, newSavedSchedule]);
+    alert(`Escala "${scheduleName}" salva com sucesso no histórico!`);
   };
 
   const goToNextStep = () => {
@@ -110,6 +153,35 @@ export default function ScheduleGeneratorPage() {
   const goToPreviousStep = () => {
     setCurrentStep((prev) => (prev > 1 ? prev - 1 : prev));
   };
+
+  const lifeguardsByPost = useMemo(() => {
+    const grouped: { [postId: string]: Lifeguard[] } = {};
+    const unassigned: Lifeguard[] = [];
+
+    for (const lifeguard of lifeguards) {
+      const prefA = lifeguard.preferenceA_id;
+      if (prefA) {
+        if (!grouped[prefA]) grouped[prefA] = [];
+        grouped[prefA].push(lifeguard);
+      } else {
+        unassigned.push(lifeguard);
+      }
+    }
+
+    for (const postId in grouped) {
+      grouped[postId].sort((a, b) => a.rank - b.rank);
+    }
+    if (unassigned.length > 0)
+      grouped["unassigned"] = unassigned.sort((a, b) => a.rank - b.rank);
+
+    return grouped;
+  }, [lifeguards]);
+
+  const postsById = useMemo(() => {
+    const map = new Map<string, BeachPost>();
+    posts.forEach((post) => map.set(post.id, post));
+    return map;
+  }, [posts]);
 
   const renderStepContent = () => {
     const g1Count = lifeguards.filter((lg) => lg.group === "G1").length;
@@ -347,36 +419,30 @@ export default function ScheduleGeneratorPage() {
 
   return (
     <div className="container mx-auto p-4 md:p-6">
-      <h1 className="text-3xl font-bold text-gray-800 text-center mb-4">
-        Gerador de Escala
-      </h1>
+      <h1 className="text-3xl font-bold text-gray-800 text-center mb-4">Gerador de Escala</h1>
       <Stepper steps={steps} currentStep={currentStep} />
       <div className="mt-8 p-6 bg-white rounded-lg shadow-md min-h-[400px] flex flex-col justify-center">
         {renderStepContent()}
       </div>
-      <div className="mt-8 flex justify-between">
-        <button
-          onClick={goToPreviousStep}
-          disabled={currentStep === 1}
-          className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Voltar
-        </button>
-        {currentStep < steps.length ? (
-          <button
-            onClick={goToNextStep}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg"
-          >
-            Próximo
-          </button>
-        ) : (
-          <button
-            onClick={handleGenerateSchedule}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg"
-          >
-            Gerar Escala
-          </button>
-        )}
+      <div className="mt-8 flex justify-between items-center">
+        <button onClick={goToPreviousStep} disabled={currentStep === 1} className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">Voltar</button>
+        
+        <div className="flex items-center space-x-4">
+          {finalSchedule && (
+            <button
+              onClick={handleSaveToHistory}
+              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg"
+            >
+              Salvar no Histórico
+            </button>
+          )}
+
+          {currentStep < steps.length ? (
+            <button onClick={goToNextStep} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Próximo</button>
+          ) : (
+            <button onClick={handleGenerateSchedule} className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg text-lg">Gerar Escala</button>
+          )}
+        </div>
       </div>
 
       {finalSchedule && (
@@ -460,13 +526,19 @@ export default function ScheduleGeneratorPage() {
 
           <div className="bg-white p-6 rounded-lg shadow-md overflow-x-auto mt-8">
             <h2 className="text-2xl font-bold mb-4 text-blue-800">
-              Escala Final por Posto
+              Previsão Guarda-Vidas
             </h2>
-            <table className="min-w-full border-collapse">
+            <table className="min-w-full border-collapse text-sm">
               <thead className="bg-blue-100">
                 <tr>
-                  <th className="p-2 border text-left font-semibold text-blue-900 sticky left-0 bg-blue-100 z-10">
+                  <th className="p-2 border text-left font-semibold text-blue-900">
                     Posto
+                  </th>
+                  <th className="p-2 border text-left font-semibold text-blue-900">
+                    Rank
+                  </th>
+                  <th className="p-2 border text-left font-semibold text-blue-900 w-48">
+                    GVC
                   </th>
                   {days.map((day) => {
                     const date = new Date(day + "T00:00:00");
@@ -487,56 +559,94 @@ export default function ScheduleGeneratorPage() {
                       </th>
                     );
                   })}
+                  <th className="p-2 border text-center font-semibold text-blue-900">
+                    Total
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {posts
                   .sort((a, b) => a.order - b.order)
                   .map((post) => (
-                    <tr key={post.id} className="hover:bg-gray-50">
-                      <td className="p-2 border font-bold text-gray-800 sticky left-0 bg-white hover:bg-gray-50 z-10">
-                        {post.name}
-                      </td>
-                      {days.map((day) => {
-                        const assignedStaff =
-                          finalSchedule[day]?.[post.id] || [];
-                        const requiredStaff =
-                          capacityMatrix[post.id]?.[day] || 0;
-                        const isDeficit = assignedStaff.length < requiredStaff;
+                    <React.Fragment key={post.id}>
+                      {(lifeguardsByPost[post.id] || []).map((lifeguard) => {
+                        const workScheduleMap = new Map<string, string>();
+                        for (const day of days) {
+                          for (const postId in finalSchedule[day]) {
+                            if (
+                              finalSchedule[day][postId].some(
+                                (lg) => lg.id === lifeguard.id
+                              )
+                            ) {
+                              workScheduleMap.set(day, postId);
+                              break;
+                            }
+                          }
+                        }
 
                         return (
-                          <td
-                            key={day}
-                            className={`p-2 border align-top text-sm ${
-                              isDeficit ? "bg-red-50" : ""
-                            }`}
-                          >
-                            <div
-                              className={`text-right text-xs font-bold mb-1 ${
-                                isDeficit ? "text-red-600" : "text-gray-400"
+                          <tr key={lifeguard.id} className="hover:bg-gray-50">
+                            <td className="p-2 border font-bold text-gray-800">
+                              {post.name}
+                            </td>
+                            <td className="p-2 border text-center">
+                              {lifeguard.rank}º
+                            </td>
+                            <td className="p-2 border">{lifeguard.name}</td>
+                            {days.map((day) => {
+                              const workingPostId = workScheduleMap.get(day);
+                              let cellContent = "--";
+
+                              if (workingPostId) {
+                                if (workingPostId === post.id) {
+                                  cellContent = "X";
+                                } else {
+                                  const workingPost =
+                                    postsById.get(workingPostId);
+                                  cellContent = `X P${
+                                    workingPost?.order || "?"
+                                  }`;
+                                }
+                              }
+
+                              return (
+                                <td
+                                  key={day}
+                                  className="p-2 border text-center font-mono"
+                                >
+                                  {cellContent}
+                                </td>
+                              );
+                            })}
+                            <td className="p-2 border text-center font-bold bg-gray-100">
+                              {workScheduleMap.size}
+                            </td>
+                          </tr>
+                        );
+                        <h2>Total GVC no {post.name}</h2>;
+                      })}
+                      <tr className="bg-gray-200 font-bold">
+                        <td colSpan={3} className="p-2 border text-right"></td>
+                        {days.map((day) => {
+                          const dailyTotal =
+                            finalSchedule[day]?.[post.id]?.length || 0;
+                          const requiredTotal =
+                            capacityMatrix[post.id]?.[day] || 0;
+                          const isDeficit = dailyTotal < requiredTotal;
+                          return (
+                            <td
+                              key={day}
+                              className={`p-2 border text-center ${
+                                isDeficit ? "bg-red-200 text-red-800" : ""
                               }`}
                             >
-                              {assignedStaff.length} / {requiredStaff}
-                            </div>
-                            <ul className="space-y-1">
-                              {assignedStaff
-                                .sort((a, b) => a.rank - b.rank)
-                                .map((lifeguard) => (
-                                  <li
-                                    key={lifeguard.id}
-                                    className="bg-gray-100 p-1 rounded text-xs"
-                                  >
-                                    <span className="font-semibold text-gray-600">
-                                      {lifeguard.rank}º
-                                    </span>{" "}
-                                    {lifeguard.name}
-                                  </li>
-                                ))}
-                            </ul>
-                          </td>
-                        );
-                      })}
-                    </tr>
+                              {dailyTotal}
+                            </td>
+                          );
+                        })}
+                        <td className="p-2 border bg-gray-200"></td>
+                      </tr>
+                    </React.Fragment>
                   ))}
               </tbody>
             </table>
