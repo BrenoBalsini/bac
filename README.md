@@ -12,7 +12,7 @@
 
 <h2>Sobre o Projeto</h2>
 <p>
-    Este projeto nasceu de uma necessidade real: substituir uma planilha de Excel complexa, demorada e propensa a erros por uma solução web moderna, rápida e inteligente. O BAC (Balsini's Algorithm Calculator) é uma Single Page Application (SPA) projetada para gerar escalas de serviço quinzenais para equipes de salva-vidas, respeitando um conjunto rigoroso de regras de negócio.
+    Este projeto nasceu de uma necessidade real: substituir uma planilha de Excel complexa, demorada e propensa a erros por uma solução web moderna, rápida e inteligente. O BAC é uma Single Page Application (SPA) projetada para gerar escalas de serviço quinzenais para equipes de salva-vidas, respeitando um conjunto rigoroso de regras de negócio.
 </p>
 <p>
     O aplicativo guia o gestor através de um assistente passo a passo, coletando todas as variáveis necessárias — desde as cotas de trabalho por grupo até as folgas solicitadas individualmente — e utiliza um algoritmo customizado para produzir uma escala final justa, eficiente e transparente.
