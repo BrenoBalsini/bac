@@ -89,13 +89,6 @@ const runAllocationPhase = (
           if (dayOfWeek > 0 && dayOfWeek < 6) score += 10;
           else score -= 20;
 
-          if (lifeguard.group === "G1") {
-            const g1AlreadyInPost = schedule[day][post.id].some(
-              (lg: Lifeguard) => lg.group === "G1"
-            );
-            if (g1AlreadyInPost) score -= 1000;
-          }
-
           possibleShifts.push({ day, postId: post.id, score });
         }
       }
@@ -139,6 +132,95 @@ const runAllocationPhase = (
   }
 
   return { schedule, shiftCount, capacity, log };
+};
+
+const runG1BalancingPhase = (
+  schedule: FinalSchedule,
+  capacity: CapacityMatrix,
+  config: ScheduleConfig,
+  log: ReasoningLog
+): {
+  balancedSchedule: FinalSchedule;
+  balancedCapacity: CapacityMatrix;
+  updatedLog: ReasoningLog;
+} => {
+  const balancedSchedule = JSON.parse(JSON.stringify(schedule));
+  const balancedCapacity = JSON.parse(JSON.stringify(capacity));
+  const updatedLog = JSON.parse(JSON.stringify(log));
+  const days = getDaysInPeriod(config.period.startDate, config.period.endDate);
+
+  for (const day of days) {
+    const postsWithG1 = new Set<string>();
+    Object.keys(balancedSchedule[day]).forEach((postId) => {
+      if (balancedSchedule[day][postId].some((lg: Lifeguard) => lg.group === "G1")) {
+        postsWithG1.add(postId);
+      }
+    });
+
+    const postsWithoutG1 = config.posts.filter((p) => !postsWithG1.has(p.id));
+
+    for (const postToFill of postsWithoutG1) {
+      if ((balancedCapacity[postToFill.id]?.[day] || 0) <= 0) continue; // Não move se o posto de destino estiver lotado
+
+      let bestCandidateToMove: {
+        lifeguard: Lifeguard;
+        fromPostId: string;
+        distance: number;
+      } | null = null;
+
+      const postsWithG1ToStealFrom = config.posts.filter(
+        (p) =>
+          postsWithG1.has(p.id) &&
+          balancedSchedule[day][p.id].filter((lg: Lifeguard) => lg.group === "G1").length >
+            1
+      );
+
+      for (const sourcePost of postsWithG1ToStealFrom) {
+        const g1sInSourcePost = balancedSchedule[day][sourcePost.id].filter(
+          (lg: Lifeguard) => lg.group === "G1"
+        );
+        if (g1sInSourcePost.length === 0) continue;
+
+        // Pega o G1 mais moderno (maior rank)
+        const mostModernG1 = g1sInSourcePost.reduce((lgA: Lifeguard, lgB: Lifeguard) =>
+          lgA.rank > lgB.rank ? lgA : lgB
+        );
+        const distance = Math.abs(postToFill.order - sourcePost.order);
+
+        if (!bestCandidateToMove || distance < bestCandidateToMove.distance) {
+          bestCandidateToMove = {
+            lifeguard: mostModernG1,
+            fromPostId: sourcePost.id,
+            distance,
+          };
+        }
+      }
+
+      if (bestCandidateToMove) {
+        const { lifeguard, fromPostId } = bestCandidateToMove;
+
+        // Remove do posto de origem
+        balancedSchedule[day][fromPostId] = balancedSchedule[day][
+          fromPostId
+        ].filter((lg: Lifeguard) => lg.id !== lifeguard.id);
+        balancedCapacity[fromPostId][day]++;
+
+        // Adiciona ao posto de destino
+        balancedSchedule[day][postToFill.id].push(lifeguard);
+        balancedCapacity[postToFill.id][day]--;
+
+        // Atualiza o log
+        const sourcePostName =
+          config.posts.find((p) => p.id === fromPostId)?.name || "";
+        updatedLog[lifeguard.id][day] = {
+          status: "Realocado (Balanceamento G1)",
+          details: `Movido do ${sourcePostName} para garantir cobertura de G1 no ${postToFill.name}.`,
+        };
+      }
+    }
+  }
+
+  return { balancedSchedule, balancedCapacity, updatedLog };
 };
 
 const runCompulsoryDayOffPhase = (
@@ -249,29 +331,17 @@ export function generateSchedule(config: ScheduleConfig): {
   const initialCapacity = JSON.parse(JSON.stringify(config.capacityMatrix));
   const initialLog: ReasoningLog = {};
 
-  const g1Result = runAllocationPhase(
-    g1Lifeguards,
-    config,
-    initialSchedule,
-    initialShiftCount,
-    initialCapacity,
-    initialLog
-  );
-  const g2Result = runAllocationPhase(
-    g2Lifeguards,
-    config,
-    g1Result.schedule,
-    g1Result.shiftCount,
-    g1Result.capacity,
-    g1Result.log
-  );
+ // 1. Roda a alocação inicial para o G1
+ const g1InitialAllocation = runAllocationPhase(g1Lifeguards, config, initialSchedule, initialShiftCount, initialCapacity, initialLog);
 
-  const { finalSchedule, compulsoryDaysOff, log } = runCompulsoryDayOffPhase(
-    g2Result.schedule,
-    g2Result.shiftCount,
-    config,
-    g2Result.log
-  );
+ // 2. Roda a NOVA fase de balanceamento do G1
+ const { balancedSchedule, balancedCapacity, updatedLog } = runG1BalancingPhase(g1InitialAllocation.schedule, g1InitialAllocation.capacity, config, g1InitialAllocation.log);
+
+ // 3. Roda a alocação para o G2, usando o resultado do balanceamento do G1
+ const g2Result = runAllocationPhase(g2Lifeguards, config, balancedSchedule, g1InitialAllocation.shiftCount, balancedCapacity, updatedLog);
+
+ // 4. Roda a fase final de ajuste de Folgas Compulsórias
+ const { finalSchedule, compulsoryDaysOff, log } = runCompulsoryDayOffPhase(g2Result.schedule, g2Result.shiftCount, config, g2Result.log);
 
   for (const lifeguard of config.lifeguards) {
     for (const day of days) {

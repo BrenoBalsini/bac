@@ -15,8 +15,6 @@ export default function ScheduleViewerPage() {
   const [scheduleHistory, setScheduleHistory] = useLocalStorage<
     SavedSchedule[]
   >("bac-schedule-history", []);
-  const [posts] = useLocalStorage<BeachPost[]>("bac-posts", []);
-  const [lifeguards] = useLocalStorage<Lifeguard[]>("bac-roster", []);
 
   const [scheduleData, setScheduleData] = useState<SavedSchedule | null>(null);
 
@@ -34,6 +32,58 @@ export default function ScheduleViewerPage() {
       navigate("/history");
     }
   }, [scheduleId, scheduleHistory, navigate]);
+
+  const days = useMemo(() => {
+    const allDays = [];
+    const currentDate = new Date(scheduleData?.inputs.startDate + "T00:00:00");
+    const lastDate = new Date(scheduleData?.inputs.endDate + "T00:00:00");
+    while (currentDate <= lastDate) {
+      allDays.push(currentDate.toISOString().split("T")[0]);
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    return allDays;
+  }, [scheduleData]);
+
+  const lifeguardsByPost = useMemo(() => {
+    if (!scheduleData) return {};
+    const grouped: { [postId: string]: Lifeguard[] } = {};
+    const unassigned: Lifeguard[] = [];
+
+    for (const lifeguard of scheduleData.inputs.snapshotLifeguards) {
+      const prefA = lifeguard.preferenceA_id;
+      if (
+        prefA &&
+        scheduleData?.inputs.snapshotPosts.some((p) => p.id === prefA)
+      ) {
+        if (!grouped[prefA]) grouped[prefA] = [];
+        grouped[prefA].push(lifeguard);
+      } else {
+        unassigned.push(lifeguard);
+      }
+    }
+    for (const postId in grouped) {
+      grouped[postId].sort((a, b) => a.rank - b.rank);
+    }
+    if (unassigned.length > 0)
+      grouped["unassigned"] = unassigned.sort((a, b) => a.rank - b.rank);
+    return grouped;
+  }, [scheduleData]);
+
+  const postsById = useMemo(() => {
+    const map = new Map<string, BeachPost>();
+    scheduleData?.inputs.snapshotPosts.forEach((post) =>
+      map.set(post.id, post)
+    );
+    return map;
+  }, [scheduleData]);
+
+  if (!scheduleData) {
+    return (
+      <div className="container mx-auto p-6 text-center">
+        Carregando escala...
+      </div>
+    );
+  }
 
   const handleCellClick = (lifeguard: Lifeguard, day: string) => {
     const reasoning =
@@ -65,6 +115,9 @@ export default function ScheduleViewerPage() {
     }
 
     if (!newLog[lifeguardId]) newLog[lifeguardId] = {};
+
+    const posts = scheduleData.inputs.snapshotPosts;
+    const lifeguards = scheduleData.inputs.snapshotLifeguards;
 
     if (action.type === "setWork") {
       const lifeguard = lifeguards.find((lg) => lg.id === lifeguardId);
@@ -114,52 +167,6 @@ export default function ScheduleViewerPage() {
     alert(`Cópia "${newName}" salva com sucesso!`);
     navigate("/history");
   };
-
-  const days = useMemo(() => {
-    if (!scheduleData) return [];
-    const allDays = [];
-    const currentDate = new Date(scheduleData.inputs.startDate + "T00:00:00");
-    const lastDate = new Date(scheduleData.inputs.endDate + "T00:00:00");
-    while (currentDate <= lastDate) {
-      allDays.push(currentDate.toISOString().split("T")[0]);
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
-    return allDays;
-  }, [scheduleData]);
-
-  const lifeguardsByPost = useMemo(() => {
-    const grouped: { [postId: string]: Lifeguard[] } = {};
-    const unassigned: Lifeguard[] = [];
-    for (const lifeguard of lifeguards) {
-      const prefA = lifeguard.preferenceA_id;
-      if (prefA && posts.some((p) => p.id === prefA)) {
-        if (!grouped[prefA]) grouped[prefA] = [];
-        grouped[prefA].push(lifeguard);
-      } else {
-        unassigned.push(lifeguard);
-      }
-    }
-    for (const postId in grouped) {
-      grouped[postId].sort((a, b) => a.rank - b.rank);
-    }
-    if (unassigned.length > 0)
-      grouped["unassigned"] = unassigned.sort((a, b) => a.rank - b.rank);
-    return grouped;
-  }, [lifeguards, posts]);
-
-  const postsById = useMemo(() => {
-    const map = new Map<string, BeachPost>();
-    posts.forEach((post) => map.set(post.id, post));
-    return map;
-  }, [posts]);
-
-  if (!scheduleData) {
-    return (
-      <div className="container mx-auto p-6 text-center">
-        Carregando escala...
-      </div>
-    );
-  }
 
   const { schedule: finalSchedule } = scheduleData.outputs;
   const { capacityMatrix } = scheduleData.inputs;
@@ -233,89 +240,110 @@ export default function ScheduleViewerPage() {
               </tr>
             </thead>
             <tbody>
-              {posts
-                .sort((a, b) => a.order - b.order)
-                .map((post) => (
-                  <React.Fragment key={post.id}>
-                    {(lifeguardsByPost[post.id] || []).map((lifeguard) => {
-                      const workScheduleMap = new Map<string, string>();
-                      for (const day of days) {
-                        for (const postId in finalSchedule[day]) {
-                          if (
-                            finalSchedule[day][postId].some(
-                              (lg) => lg.id === lifeguard.id
-                            )
-                          ) {
-                            workScheduleMap.set(day, postId);
-                            break;
-                          }
-                        }
-                      }
+              {scheduleData.inputs.snapshotPosts.sort((a, b) => a.order - b.order).map((post) => {
+                const postLifeguards = lifeguardsByPost[post.id] || [];
 
-                      return (
-                        <tr key={lifeguard.id} className="hover:bg-gray-50">
-                          <td className="p-2 border font-bold text-gray-800">
-                            {post.name}
-                          </td>
-                          <td className="p-2 border text-center">
-                            {lifeguard.rank}º
-                          </td>
-                          <td className="p-2 border">{lifeguard.name}</td>
-                          {days.map((day) => {
-                            const workingPostId = workScheduleMap.get(day);
-                            let cellContent = "--";
-
-                            if (workingPostId) {
-                              if (workingPostId === post.id) {
-                                cellContent = "X";
-                              } else {
-                                const workingPost =
-                                  postsById.get(workingPostId);
-                                cellContent = `X P${workingPost?.order || "?"}`;
+                  if (postLifeguards.length > 0) {
+                    // Se houver salva-vidas para este posto, renderiza o bloco completo
+                    return (
+                      <React.Fragment key={post.id}>
+                        {postLifeguards.map((lifeguard) => {
+                          const workScheduleMap = new Map<string, string>();
+                          for (const day of days) {
+                            for (const postId in finalSchedule[day]) {
+                              if (
+                                finalSchedule[day][postId].some(
+                                  (lg) => lg.id === lifeguard.id
+                                )
+                              ) {
+                                workScheduleMap.set(day, postId);
+                                break;
                               }
                             }
-
+                          }
+                          return (
+                            <tr key={lifeguard.id} className="hover:bg-gray-50">
+                              <td className="p-2 border font-bold text-gray-800">
+                                {post.name}
+                              </td>
+                              <td className="p-2 border text-center">
+                                {lifeguard.rank}º
+                              </td>
+                              <td className="p-2 border">{lifeguard.name}</td>
+                              {days.map((day) => {
+                                const workingPostId = workScheduleMap.get(day);
+                                let cellContent = "--";
+                                if (workingPostId) {
+                                  if (workingPostId === post.id) {
+                                    cellContent = "X";
+                                  } else {
+                                    const workingPost =
+                                      postsById.get(workingPostId);
+                                    cellContent = `X ${
+                                      workingPost?.name || "?"
+                                    }`;
+                                  }
+                                }
+                                return (
+                                  <td
+                                    key={day}
+                                    className="p-2 border text-center font-mono cursor-pointer hover:bg-blue-100 ransition-colors"
+                                    onClick={() =>
+                                      handleCellClick(lifeguard, day)
+                                    }
+                                  >
+                                    {cellContent}
+                                  </td>
+                                );
+                              })}
+                              <td className="p-2 border text-center font-bold bg-gray-100">
+                                {workScheduleMap.size}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="bg-gray-200 font-bold">
+                          <td colSpan={3} className="p-2 border text-right">
+                            Total GVC no {post.name}
+                          </td>
+                          {days.map((day) => {
+                            const dailyTotal =
+                              finalSchedule[day]?.[post.id]?.length || 0;
+                            const requiredTotal =
+                              capacityMatrix[post.id]?.[day] || 0;
+                            const isDeficit = dailyTotal < requiredTotal;
                             return (
                               <td
                                 key={day}
-                                className="p-2 border text-center font-mono cursor-pointer hover:bg-blue-100 transition-colors"
-                                onClick={() => handleCellClick(lifeguard, day)}
+                                className={`p-2 border text-center ${
+                                  isDeficit ? "bg-red-200 text-red-800" : ""
+                                }`}
                               >
-                                {cellContent}
+                                {dailyTotal} / {requiredTotal}
                               </td>
                             );
                           })}
-                          <td className="p-2 border text-center font-bold bg-gray-100">
-                            {workScheduleMap.size}
-                          </td>
+                          <td className="p-2 border bg-gray-200"></td>
                         </tr>
-                      );
-                    })}
-                    <tr className="bg-gray-200 font-bold">
-                      <td colSpan={3} className="p-2 border text-right">
-                        Total GVC no {post.name}
-                      </td>
-                      {days.map((day) => {
-                        const dailyTotal =
-                          finalSchedule[day]?.[post.id]?.length || 0;
-                        const requiredTotal =
-                          capacityMatrix[post.id]?.[day] || 0;
-                        const isDeficit = dailyTotal < requiredTotal;
-                        return (
-                          <td
-                            key={day}
-                            className={`p-2 border text-center ${
-                              isDeficit ? "bg-red-200 text-red-800" : ""
-                            }`}
-                          >
-                            {dailyTotal}
-                          </td>
-                        );
-                      })}
-                      <td className="p-2 border bg-gray-200"></td>
-                    </tr>
-                  </React.Fragment>
-                ))}
+                      </React.Fragment>
+                    );
+                  } else {
+                    // Se NÃO houver salva-vidas, renderiza uma linha de placeholder
+                    return (
+                      <tr key={post.id} className="bg-gray-50">
+                        <td className="p-2 border font-bold text-gray-700">
+                          {post.name}
+                        </td>
+                        <td
+                          colSpan={days.length + 3}
+                          className="p-2 border text-center text-gray-400 italic"
+                        >
+                          Nenhum salva-vidas com esta preferência principal.
+                        </td>
+                      </tr>
+                    );
+                  }
+                })}
             </tbody>
           </table>
         </div>
@@ -326,7 +354,7 @@ export default function ScheduleViewerPage() {
         onClose={() => setIsEditModalOpen(false)}
         onSave={handleUpdateShift}
         context={editingContext}
-        posts={posts}
+        posts={scheduleData.inputs.snapshotPosts}
       />
     </>
   );

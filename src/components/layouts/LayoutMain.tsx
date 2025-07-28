@@ -6,7 +6,7 @@ export default function LayoutMain() {
     <div>
       <Navbar />
 
-      <main>
+      <main className="pt-16">
         <Outlet />
       </main>
     </div>
